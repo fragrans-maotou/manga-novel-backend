@@ -1,0 +1,92 @@
+name: manga-novel-backend
+
+services:
+  postgres:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    image: manga-novel-backend-postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-manga}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-manga}
+      POSTGRES_DB: ${POSTGRES_DB:-manga}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-manga} -d ${POSTGRES_DB:-manga}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    mem_limit: ${REDIS_MEM_LIMIT:-256m}
+
+  gateway-go:
+    build:
+      context: ./gateway-go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: ${HTTP_ADDR:-:8080}
+      DATABASE_URL: ${DATABASE_URL:-postgres://manga:manga@postgres:5432/manga?sslmode=disable}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      STREAM_BLPOP_TIMEOUT: ${STREAM_BLPOP_TIMEOUT:-30s}
+      CHAPTER_CACHE_TTL: ${CHAPTER_CACHE_TTL:-86400}
+      SCRAPE_TIMEOUT_MS: ${SCRAPE_TIMEOUT_MS:-8000}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-15s}
+      PROXY_HTTP_TIMEOUT: ${PROXY_HTTP_TIMEOUT:-30s}
+    ports:
+      - "${GATEWAY_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    mem_limit: ${GATEWAY_MEM_LIMIT:-512m}
+
+  scraper-py:
+    build:
+      context: ./scraper-py
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_BRPOP_TIMEOUT: ${REDIS_BRPOP_TIMEOUT:-5}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      SCRAPE_TIMEOUT_MS: ${SCRAPE_TIMEOUT_MS:-8000}
+      FETCHER_IMPERSONATE: ${FETCHER_IMPERSONATE:-chrome124}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RULES_DIR: /app/app/rules
+    mem_limit: ${SCRAPER_MEM_LIMIT:-512m}
+
+volumes:
+  postgres_data:

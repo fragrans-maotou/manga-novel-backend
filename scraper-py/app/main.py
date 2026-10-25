@@ -65,7 +65,13 @@ async def async_main(settings: Settings | None = None) -> None:
     rules_dir = Path(os.getenv("RULES_DIR", str(_default_rules_dir())))
     rules = RuleStore(rules_dir)
 
-    rdb = Redis.from_url(settings.redis_url, decode_responses=True)
+    rdb = Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        # BRPOP blocks up to redis_brpop_timeout; socket must outlive that.
+        socket_timeout=None,
+        socket_connect_timeout=5,
+    )
     fetcher = Fetcher(
         impersonate=settings.fetcher_impersonate,
         retries=settings.fetcher_retries,
