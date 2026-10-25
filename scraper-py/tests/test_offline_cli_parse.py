@@ -28,7 +28,7 @@ def test_offline_manga_sandbox_fixture():
     result = offline_parse(rule, html, page_url=rule.base_url)
     assert result["media_type"] == "manga"
     assert result["count"] == 4
-    assert result["images"][0].startswith("https://cdn.demo-manga.example.invalid/i/")
+    assert result["images"][0].startswith("http://mock-source:8090/manga/img/")
     assert result["images"][0].endswith("a01.png")
 
 
