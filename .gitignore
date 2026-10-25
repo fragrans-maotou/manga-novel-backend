@@ -1,0 +1,14 @@
+bin/
+dist/
+__pycache__/
+.venv/
+.env
+.env.*
+!.env.example
+*.exe
+*.test
+coverage.*
+.idea/
+.vscode/
+*.swp
+.DS_Store
