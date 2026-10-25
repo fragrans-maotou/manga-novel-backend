@@ -24,10 +24,19 @@ type Config struct {
 
 	// ChapterCacheTTL matches SPEC §5.3 (86400s) unless overridden.
 	ChapterCacheTTL time.Duration
+
+	// ScrapeTimeoutMS is written into scrape task payloads (SPEC §5.1 example: 8000).
+	ScrapeTimeoutMS int
+
+	// ShutdownTimeout bounds graceful shutdown after SIGINT/SIGTERM.
+	ShutdownTimeout time.Duration
+
+	// ProxyHTTPTimeout bounds upstream image fetches in the proxy path.
+	ProxyHTTPTimeout time.Duration
 }
 
 // Load reads configuration from environment variables.
-// Required: DATABASE_URL, REDIS_ADDR (or REDIS_URL host part via REDIS_ADDR).
+// Required: DATABASE_URL, REDIS_ADDR.
 func Load() (*Config, error) {
 	cfg := &Config{
 		HTTPAddr:           getenv("HTTP_ADDR", ":8080"),
@@ -37,6 +46,9 @@ func Load() (*Config, error) {
 		RedisDB:            getenvInt("REDIS_DB", 0),
 		StreamBLPopTimeout: getenvDuration("STREAM_BLPOP_TIMEOUT", 30*time.Second),
 		ChapterCacheTTL:    getenvDuration("CHAPTER_CACHE_TTL", 86400*time.Second),
+		ScrapeTimeoutMS:    getenvInt("SCRAPE_TIMEOUT_MS", 8000),
+		ShutdownTimeout:    getenvDuration("SHUTDOWN_TIMEOUT", 15*time.Second),
+		ProxyHTTPTimeout:   getenvDuration("PROXY_HTTP_TIMEOUT", 30*time.Second),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -47,6 +59,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.RedisDB < 0 {
 		return nil, fmt.Errorf("config: REDIS_DB must be >= 0")
+	}
+	if cfg.ScrapeTimeoutMS <= 0 {
+		return nil, fmt.Errorf("config: SCRAPE_TIMEOUT_MS must be > 0")
 	}
 
 	return cfg, nil
@@ -76,7 +91,6 @@ func getenvDuration(key string, fallback time.Duration) time.Duration {
 	if v == "" {
 		return fallback
 	}
-	// Accept Go duration ("30s") or integer seconds.
 	if d, err := time.ParseDuration(v); err == nil {
 		return d
 	}
