@@ -34,6 +34,7 @@ type ChapterService struct {
 	queue       domain.ScrapeQueueRepository
 	stream      domain.StreamRepository
 	health      domain.SourceHealthRepository
+	tickets     domain.ProxyTicketRepository
 	logger      *slog.Logger
 
 	streamTimeout   time.Duration
@@ -52,6 +53,7 @@ type ChapterServiceDeps struct {
 	Queue       domain.ScrapeQueueRepository
 	Stream      domain.StreamRepository
 	Health      domain.SourceHealthRepository
+	Tickets     domain.ProxyTicketRepository
 	Logger      *slog.Logger
 
 	StreamTimeout   time.Duration
@@ -62,7 +64,7 @@ type ChapterServiceDeps struct {
 // NewChapterService constructs a ChapterService via explicit DI.
 func NewChapterService(d ChapterServiceDeps) *ChapterService {
 	if d.Chapters == nil || d.WorkSources == nil || d.Works == nil ||
-		d.Cache == nil || d.Queue == nil || d.Stream == nil || d.Health == nil {
+		d.Cache == nil || d.Queue == nil || d.Stream == nil || d.Health == nil || d.Tickets == nil {
 		panic("service: NewChapterService: all repositories are required")
 	}
 	logger := d.Logger
@@ -89,6 +91,7 @@ func NewChapterService(d ChapterServiceDeps) *ChapterService {
 		queue:           d.Queue,
 		stream:          d.Stream,
 		health:          d.Health,
+		tickets:         d.Tickets,
 		logger:          logger,
 		streamTimeout:   timeout,
 		scrapeTimeoutMS: scrapeMS,
@@ -151,10 +154,22 @@ func (s *ChapterService) StreamNovel(ctx context.Context, chapterID uuid.UUID, e
 }
 
 // ensureChapterCache returns cache body, using singleflight scrape on miss.
+// For manga, a cache hit is only accepted when at least one proxy ticket still exists
+// (tickets TTL 7200s << chapter cache TTL 86400s).
 func (s *ChapterService) ensureChapterCache(ctx context.Context, chapterID uuid.UUID, expect domain.MediaType) (string, error) {
 	idStr := chapterID.String()
 	if cached, err := s.cache.Get(ctx, idStr); err == nil {
-		return cached, nil
+		ok, verr := s.mangaCacheUsable(ctx, expect, cached)
+		if verr != nil {
+			return "", verr
+		}
+		if ok {
+			return cached, nil
+		}
+		if err := s.cache.Delete(ctx, idStr); err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return "", err
+		}
+		s.logger.Info("manga chapter cache invalidated; proxy tickets expired", "chapter_id", idStr)
 	} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return "", err
 	}
@@ -162,7 +177,14 @@ func (s *ChapterService) ensureChapterCache(ctx context.Context, chapterID uuid.
 	v, err, _ := s.sf.Do("chapter:"+idStr, func() (interface{}, error) {
 		// Double-check after winning the flight.
 		if cached, err := s.cache.Get(ctx, idStr); err == nil {
-			return cached, nil
+			ok, verr := s.mangaCacheUsable(ctx, expect, cached)
+			if verr != nil {
+				return nil, verr
+			}
+			if ok {
+				return cached, nil
+			}
+			_ = s.cache.Delete(ctx, idStr)
 		} else if err != nil && !errors.Is(err, domain.ErrNotFound) {
 			return nil, err
 		}
@@ -420,4 +442,53 @@ func isUnavailable(err error) bool {
 		return true
 	}
 	return strings.Contains(err.Error(), streamErrorPref)
+}
+
+const proxyImagePathPrefix = "/api/v1/proxy/image/"
+
+// mangaCacheUsable reports whether a cached chapter body may be served.
+// Novel caches are always usable. Manga caches require images and live tickets.
+func (s *ChapterService) mangaCacheUsable(ctx context.Context, expect domain.MediaType, raw string) (bool, error) {
+	if expect != domain.MediaTypeManga {
+		return true, nil
+	}
+	var parsed domain.MangaChapterCache
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return false, nil // treat corrupt cache as miss
+	}
+	if len(parsed.Images) == 0 {
+		return false, nil
+	}
+	live := 0
+	for _, img := range parsed.Images {
+		ticket := ticketIDFromProxyPath(img)
+		if ticket == "" {
+			continue
+		}
+		if _, err := s.tickets.Get(ctx, ticket); err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				continue
+			}
+			return false, err
+		}
+		live++
+	}
+	// Chapter cache outlives tickets — require at least one live ticket.
+	return live > 0, nil
+}
+
+func ticketIDFromProxyPath(imagePath string) string {
+	imagePath = strings.TrimSpace(imagePath)
+	if imagePath == "" {
+		return ""
+	}
+	if i := strings.Index(imagePath, proxyImagePathPrefix); i >= 0 {
+		rest := imagePath[i+len(proxyImagePathPrefix):]
+		rest = strings.Trim(rest, "/")
+		if j := strings.IndexAny(rest, "?#"); j >= 0 {
+			rest = rest[:j]
+		}
+		return rest
+	}
+	return ""
 }

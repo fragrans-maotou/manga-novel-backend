@@ -68,6 +68,7 @@ func main() {
 		Queue:           queueRepo,
 		Stream:          streamRepo,
 		Health:          healthRepo,
+		Tickets:         ticketRepo,
 		Logger:          logger,
 		StreamTimeout:   cfg.StreamBLPopTimeout,
 		ScrapeTimeoutMS: cfg.ScrapeTimeoutMS,

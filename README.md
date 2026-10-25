@@ -20,7 +20,7 @@ make demo          # works 非空 → 小说 SSE → 漫画 JSON → 图片代�
 - `GET /api/v1/works` 至少 2 部作品（小说 + 漫画）
 - 小说 SSE 出现「第一段…」「面包店」等段落
 - 漫画 JSON 含 `images: ["/api/v1/proxy/image/..."]`
-- 代理 `HEAD` 返回 200
+- 代理 `GET` 返回 200（PNG）
 
 ### 固定演示 UUID（`migrations/002_seed_demo.sql`）
 
@@ -37,6 +37,8 @@ make demo          # works 非空 → 小说 SSE → 漫画 JSON → 图片代�
 curl -N http://127.0.0.1:8080/api/v1/chapters/33333333-3333-3333-3333-333333333301/novel
 curl http://127.0.0.1:8080/api/v1/chapters/33333333-3333-3333-3333-333333333302/manga
 ```
+
+> **图片票 TTL**：`proxy:ticket` 约 2 小时；`cache:chapter` 约 24 小时。票过期后 gateway 会丢掉章节缓存并自动重采，避免把死 ticket URL 返回给客户端。
 
 > **数据卷提示**：Postgres 只在**空数据目录**执行 init SQL。已有卷时用 `make seed` 补种，或 `make reset-demo` 清空重来。
 

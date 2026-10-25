@@ -41,6 +41,32 @@ func (m *memCache) Delete(_ context.Context, chapterID string) error {
 	return nil
 }
 
+type memTickets struct {
+	mu   sync.Mutex
+	data map[string]*domain.ProxyTicket
+}
+
+func newMemTickets() *memTickets {
+	return &memTickets{data: map[string]*domain.ProxyTicket{}}
+}
+
+func (m *memTickets) put(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[id] = &domain.ProxyTicket{URL: "http://mock/img/" + id, Referer: "http://mock/", UA: "test"}
+}
+
+func (m *memTickets) Get(_ context.Context, ticket string) (*domain.ProxyTicket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.data[ticket]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cp := *v
+	return &cp, nil
+}
+
 type countingQueue struct {
 	n atomic.Int32
 	// onEnqueue optionally pushes READY into stream for the task
@@ -198,11 +224,13 @@ func TestGetMangaChapter_SingleflightOneEnqueue(t *testing.T) {
 
 	cache := newMemCache()
 	stream := newMemStream()
+	tickets := newMemTickets()
 	queue := &countingQueue{
 		onEnqueue: func(task *domain.ScrapeTask) {
 			// Simulate slow worker: delay then write cache + READY.
 			go func() {
 				time.Sleep(30 * time.Millisecond)
+				tickets.put("abc")
 				_ = cache.Set(context.Background(), task.ChapterID, `{"chapter_id":"`+task.ChapterID+`","images":["/api/v1/proxy/image/abc"]}`, time.Hour)
 				stream.push(task.TaskID, streamReady)
 			}()
@@ -224,6 +252,7 @@ func TestGetMangaChapter_SingleflightOneEnqueue(t *testing.T) {
 		Queue:           queue,
 		Stream:          stream,
 		Health:          newMemHealth(),
+		Tickets:         tickets,
 		StreamTimeout:   2 * time.Second,
 		ScrapeTimeoutMS: 8000,
 		CacheTTL:        time.Hour,
@@ -265,6 +294,7 @@ func TestStreamNovel_CacheHitNoEnqueue(t *testing.T) {
 		Queue:           queue,
 		Stream:          newMemStream(),
 		Health:          newMemHealth(),
+		Tickets:         newMemTickets(),
 		StreamTimeout:   time.Second,
 		ScrapeTimeoutMS: 8000,
 	})
@@ -291,5 +321,80 @@ func TestScrapeNovel_FailoverOnError(t *testing.T) {
 		if !isStreamError("[ERROR]:boom") {
 			t.Fatal("expected stream error detection")
 		}
+	}
+}
+
+func TestGetMangaChapter_ExpiredTicketsTriggerRescrape(t *testing.T) {
+	chapterID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	wsID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	workID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+
+	cache := newMemCache()
+	// Stale cache points at dead tickets (TTL mismatch scenario).
+	stale := `{"chapter_id":"` + chapterID.String() + `","images":["/api/v1/proxy/image/deadticket1","/api/v1/proxy/image/deadticket2"]}`
+	_ = cache.Set(context.Background(), chapterID.String(), stale, time.Hour)
+
+	tickets := newMemTickets() // empty → all tickets missing
+	stream := newMemStream()
+	queue := &countingQueue{
+		onEnqueue: func(task *domain.ScrapeTask) {
+			go func() {
+				time.Sleep(20 * time.Millisecond)
+				tickets.put("fresh001")
+				_ = cache.Set(context.Background(), task.ChapterID,
+					`{"chapter_id":"`+task.ChapterID+`","images":["/api/v1/proxy/image/fresh001"]}`, time.Hour)
+				stream.push(task.TaskID, streamReady)
+			}()
+		},
+	}
+
+	svc := NewChapterService(ChapterServiceDeps{
+		Chapters: &fixedChapterRepo{ch: domain.Chapter{
+			ID: chapterID, WorkSourceID: wsID, ChapterNum: 1,
+			Title: "c1", RemoteChapterURL: "https://example.com/1",
+		}},
+		WorkSources: &fixedWorkSourceRepo{ws: domain.WorkSource{
+			ID: wsID, WorkID: workID, SourceID: "src_a", RemoteWorkURL: "https://example.com/",
+		}},
+		Works: &fixedWorkRepo{w: domain.Work{
+			ID: workID, Title: "t", Author: "a", MediaType: domain.MediaTypeManga, Status: domain.WorkStatusOngoing,
+		}},
+		Cache:           cache,
+		Queue:           queue,
+		Stream:          stream,
+		Health:          newMemHealth(),
+		Tickets:         tickets,
+		StreamTimeout:   2 * time.Second,
+		ScrapeTimeoutMS: 8000,
+		CacheTTL:        time.Hour,
+	})
+
+	out, err := svc.GetMangaChapter(context.Background(), chapterID)
+	if err != nil {
+		t.Fatalf("GetMangaChapter: %v", err)
+	}
+	if queue.n.Load() != 1 {
+		t.Fatalf("expected rescrape enqueue=1, got %d", queue.n.Load())
+	}
+	if len(out.Images) != 1 || out.Images[0] != "/api/v1/proxy/image/fresh001" {
+		t.Fatalf("expected fresh ticket URL, got %+v", out)
+	}
+	// Must not return dead tickets.
+	for _, img := range out.Images {
+		if ticketIDFromProxyPath(img) == "deadticket1" || ticketIDFromProxyPath(img) == "deadticket2" {
+			t.Fatalf("returned expired ticket path %q", img)
+		}
+	}
+}
+
+func TestTicketIDFromProxyPath(t *testing.T) {
+	if got := ticketIDFromProxyPath("/api/v1/proxy/image/abc123"); got != "abc123" {
+		t.Fatalf("got %q", got)
+	}
+	if got := ticketIDFromProxyPath("http://x/api/v1/proxy/image/zz?x=1"); got != "zz" {
+		t.Fatalf("got %q", got)
+	}
+	if got := ticketIDFromProxyPath("/other"); got != "" {
+		t.Fatalf("got %q", got)
 	}
 }

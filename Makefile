@@ -106,7 +106,7 @@ cli-manga:
 
 cli-test: cli-novel cli-manga
 
-# End-to-end demo: list works → novel SSE → manga JSON → image proxy HEAD
+# End-to-end demo: list works → novel SSE → manga JSON → image proxy GET
 demo: wait-healthy
 	@echo "==== GET /api/v1/works ===="
 	@curl -fsS "$(GATEWAY)/api/v1/works" | tee /tmp/manga-works.json; echo
@@ -118,15 +118,19 @@ demo: wait-healthy
 	@grep -q "data:" /tmp/manga-novel-sse.txt
 	@grep -E -q "晨光|第一段|面包店|灯塔" /tmp/manga-novel-sse.txt || \
 	  (echo "novel SSE missing expected paragraph text"; cat /tmp/manga-novel-sse.txt; exit 1)
+	@echo "==== clear manga chapter cache (demo fallback; gateway also auto-refreshes dead tickets) ===="
+	@$(COMPOSE) exec -T redis redis-cli DEL "cache:chapter:$(MANGA_CHAPTER_ID)" >/dev/null || true
 	@echo "==== manga chapter JSON ===="
 	@curl -fsS --max-time 30 \
 	  "$(GATEWAY)/api/v1/chapters/$(MANGA_CHAPTER_ID)/manga" \
 	  | tee /tmp/manga-chapter.json; echo
 	@python3 -c 'import json; d=json.load(open("/tmp/manga-chapter.json")); imgs=d.get("images") or []; assert len(imgs)>=1, d; print("images:", len(imgs)); open("/tmp/manga-first-image.path","w").write(imgs[0])'
-	@echo "==== proxy image HEAD ===="
+	@echo "==== proxy image GET ===="
 	@IMG_PATH=$$(cat /tmp/manga-first-image.path); \
-	  curl -fsSI --max-time 20 "$(GATEWAY)$$IMG_PATH" | tee /tmp/manga-proxy.headers; \
-	  grep -qi "200 OK\|HTTP/1.1 200\|HTTP/2 200" /tmp/manga-proxy.headers
+	  code=$$(curl -fsS --max-time 20 -o /tmp/manga-proxy.png -w "%{http_code}" "$(GATEWAY)$$IMG_PATH"); \
+	  echo "HTTP $$code"; test "$$code" = "200"; \
+	  test -s /tmp/manga-proxy.png; \
+	  python3 -c 'd=open("/tmp/manga-proxy.png","rb").read(8); assert d.startswith(b"\x89PNG"), d; print("png ok", len(open("/tmp/manga-proxy.png","rb").read()), "bytes")'
 	@echo "==== progress PUT/GET ===="
 	@curl -fsS -X PUT "$(GATEWAY)/api/v1/works/$(NOVEL_WORK_ID)/progress" \
 	  -H 'Content-Type: application/json' \
