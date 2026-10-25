@@ -17,7 +17,7 @@ VALUES
     'Demo Manga JS (mock-source)',
     'manga',
     'http://mock-source:8090/',
-    '{"source_id":"demo_manga_js","media_type":"manga","manga":{"image_base_url":"http://mock-source:8090/manga/img/","js_extract":true}}'::jsonb,
+    '{"source_id":"demo_manga_js","media_type":"manga","manga":{"xor_key":"12","image_base_url":"http://mock-source:8090/manga/img/","js_extract":"b64json"}}'::jsonb,
     TRUE,
     NOW()
   )

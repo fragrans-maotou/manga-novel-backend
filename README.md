@@ -52,6 +52,22 @@ curl http://127.0.0.1:8080/api/v1/chapters/33333333-3333-3333-3333-333333333302/
 | `postgres:16` | 表结构 + demo seed（镜像内 001/002） |
 | `redis:7` | 队列 / stream / cache / ticket / health |
 
+
+## mock-source 对抗能力（本地压测）
+
+虚构演示站模拟真站常见套路（**不含真实作品内容**）：
+
+| 手段 | 行为 |
+|------|------|
+| Referer 防盗链 | `/manga/img/*` 无 Referer 或不匹配 → **403**；章节页 Referer → 200 |
+| 单字节 XOR | 图响应按 `xor_key=12` 异或；gateway 按 ticket 流式解密后为 PNG |
+| JS 混淆图源 | 章节 HTML 内 base64(JSON 数组)，QuickJS 规则解码；诱饵明文列表会被忽略 |
+| Cookie（软校验） | 期望 `mock_session=ok`；缺 Cookie 但 Referer 正确仍放行（SPEC ticket 无 Cookie 字段） |
+
+```bash
+make demo-hostile   # 裸 curl 图 → 403；经 gateway proxy → 200 PNG
+```
+
 ## 常用命令
 
 ```bash

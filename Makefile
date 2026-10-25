@@ -13,7 +13,7 @@ DEMO_USER_ID ?= 44444444-4444-4444-4444-444444444401
 
 .PHONY: help up down down-v build logs ps config restart smoke \
 	cli-novel cli-manga cli-test health sql redis-ping sync-migration \
-	seed reset-demo demo wait-healthy
+	seed reset-demo demo demo-hostile wait-healthy
 
 help:
 	@echo "Targets:"
@@ -21,6 +21,7 @@ help:
 	@echo "  make reset-demo   - down -v + up + seed (clean demo)"
 	@echo "  make seed         - apply migrations/002_seed_demo.sql via psql"
 	@echo "  make demo         - curl works + novel SSE + manga JSON + proxy"
+	@echo "  make demo-hostile - demo + Referer 403 + XOR ciphertext checks"
 	@echo "  make health / sql / redis-ping / logs / down"
 
 config:
@@ -138,6 +139,24 @@ demo: wait-healthy
 	  | tee /tmp/manga-progress.json; echo
 	@curl -fsS "$(GATEWAY)/api/v1/works/$(NOVEL_WORK_ID)/progress?user_id=$(DEMO_USER_ID)" | grep -q '"position_offset":42'
 	@echo "demo: OK"
+
+
+demo-hostile: demo
+	@echo "==== hostile: bare image without Referer must be 403 ===="
+	@code=$$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:$${MOCK_SOURCE_PORT:-8090}/manga/img/a01.png"); \
+	  echo "bare GET HTTP $$code"; test "$$code" = "403"
+	@echo "==== hostile: Referer-only ciphertext is NOT PNG magic ===="
+	@curl -fsS -o /tmp/manga-xor.bin -H "Referer: http://127.0.0.1:$${MOCK_SOURCE_PORT:-8090}/manga/chapter-1.html" \
+	  "http://127.0.0.1:$${MOCK_SOURCE_PORT:-8090}/manga/img/a01.png"; \
+	  python3 -c 'd=open("/tmp/manga-xor.bin","rb").read(8); assert not d.startswith(b"\x89PNG"), d; print("ciphertext ok", len(open("/tmp/manga-xor.bin","rb").read()), "bytes")'
+	@echo "==== hostile: gateway proxy still returns decrypted PNG ===="
+	@$(COMPOSE) exec -T redis redis-cli DEL "cache:chapter:$(MANGA_CHAPTER_ID)" >/dev/null || true
+	@curl -fsS --max-time 30 "$(GATEWAY)/api/v1/chapters/$(MANGA_CHAPTER_ID)/manga" > /tmp/manga-hostile.json
+	@IMG_PATH=$$(python3 -c 'import json; print(json.load(open("/tmp/manga-hostile.json"))["images"][0])'); \
+	  code=$$(curl -fsS --max-time 20 -o /tmp/manga-hostile.png -w "%{http_code}" "$(GATEWAY)$$IMG_PATH"); \
+	  echo "proxy GET HTTP $$code"; test "$$code" = "200"; \
+	  python3 -c 'd=open("/tmp/manga-hostile.png","rb").read(8); assert d.startswith(b"\x89PNG"), d; print("decrypted png ok")'
+	@echo "demo-hostile: OK"
 
 smoke: up wait-healthy
 	@$(MAKE) health

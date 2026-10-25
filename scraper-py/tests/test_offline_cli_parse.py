@@ -30,6 +30,8 @@ def test_offline_manga_sandbox_fixture():
     assert result["count"] == 4
     assert result["images"][0].startswith("http://mock-source:8090/manga/img/")
     assert result["images"][0].endswith("a01.png")
+    assert rule.manga.xor_key == "12"
+    assert "evil.png" not in "".join(result["images"])
 
 
 def test_sandbox_timeout():

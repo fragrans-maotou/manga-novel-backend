@@ -1,14 +1,36 @@
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Demo Manga Ch.1</title></head>
-<body>
-  <h1>第1话 沙盒解混淆演示</h1>
-  <div id="viewer"></div>
-  <script id="chapter-data" type="text/plain">
-a01.png|a02.png|a03.png|a04.png
-  </script>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>第1话 沙盒解混淆演示 - Demo Manga</title>
+  <link rel="stylesheet" href="/assets/noise.css">
+</head>
+<body class="reader-page" data-chapter="1">
+  <header class="site-nav"><a href="/">首页</a><span class="ad-slot">广告占位</span></header>
+  <div class="breadcrumb">漫画 / 演示 / <span>第1话</span></div>
+  <h1 class="chapter-title">第1话 沙盒解混淆演示</h1>
+  <div class="page-indicator">1 / 4</div>
+  <div id="viewer" class="manga-viewer" data-mode="scroll">
+    <div class="loading">加载中…</div>
+  </div>
+  <!-- decoy plaintext that must NOT be used by the rule -->
+  <script id="decoy-data" type="text/plain">evil.png|trap.png</script>
   <script>
     window.__NOISE__ = true;
+    window.__ADS__ = ["https://ads.example.invalid/x.js"];
   </script>
+  <!-- Real payload: base64(JSON array of relative image names) -->
+  <script id="chapter-data" type="application/json">
+{"v":1,"algo":"b64json","payload":"WyJhMDEucG5nIiwiYTAyLnBuZyIsImEwMy5wbmciLCJhMDQucG5nIl0="}
+  </script>
+  <script>
+    // Browser-side decoy (QuickJS rule ignores this)
+    try {
+      var _p = JSON.parse(document.getElementById('chapter-data').textContent);
+      window.__PAGES__ = _p.payload;
+    } catch (e) {}
+  </script>
+  <footer class="site-footer"><p>虚构演示站 · 非真实作品</p></footer>
 </body>
 </html>
