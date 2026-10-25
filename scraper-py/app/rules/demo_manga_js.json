@@ -1,12 +1,12 @@
 {
   "source_id": "demo_manga_js",
-  "name": "Demo Manga with QuickJS sandbox",
+  "name": "Demo Manga with QuickJS sandbox (mock-source)",
   "media_type": "manga",
-  "base_url": "https://demo-manga.example.invalid/",
+  "base_url": "http://mock-source:8090/",
   "sandbox_timeout_seconds": 2.0,
   "manga": {
-    "xor_key": "12",
-    "image_base_url": "https://cdn.demo-manga.example.invalid/i/",
+    "xor_key": "",
+    "image_base_url": "http://mock-source:8090/manga/img/",
     "js_extract": {
       "script_xpath": "//script[@id='chapter-data']/text()",
       "js_body": "var s = (raw || '').replace(/^\\s+|\\s+$/g, '');\nvar parts = s.split('|');\nvar out = [];\nfor (var i = 0; i < parts.length; i++) {\n  var p = parts[i].replace(/^\\s+|\\s+$/g, '');\n  if (p) { out.push(p); }\n}\nreturn out;"

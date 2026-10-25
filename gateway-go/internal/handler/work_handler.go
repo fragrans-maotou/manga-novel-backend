@@ -9,17 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// WorkHandler serves work listing and chapter catalog endpoints.
+// WorkHandler serves work listing, chapter catalog, and reading progress.
 type WorkHandler struct {
-	works *service.WorkService
+	works    *service.WorkService
+	progress *service.ProgressService
 }
 
-// NewWorkHandler injects WorkService.
-func NewWorkHandler(works *service.WorkService) *WorkHandler {
-	if works == nil {
-		panic("handler: NewWorkHandler: works must not be nil")
+// NewWorkHandler injects WorkService and ProgressService.
+func NewWorkHandler(works *service.WorkService, progress *service.ProgressService) *WorkHandler {
+	if works == nil || progress == nil {
+		panic("handler: NewWorkHandler: works and progress must not be nil")
 	}
-	return &WorkHandler{works: works}
+	return &WorkHandler{works: works, progress: progress}
 }
 
 // ListWorks GET /api/v1/works?media_type=&limit=&offset=
@@ -65,4 +66,70 @@ func (h *WorkHandler) ListChapters(c *fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"items": items})
+}
+
+type putProgressBody struct {
+	ChapterID      string `json:"chapter_id"`
+	PositionOffset int    `json:"position_offset"`
+	UserID         string `json:"user_id"`
+}
+
+// PutProgress PUT /api/v1/works/:workID/progress
+// user_id may come from JSON body, query, or X-User-ID header (demo auth stub).
+func (h *WorkHandler) PutProgress(c *fiber.Ctx) error {
+	workID, err := uuid.Parse(c.Params("workID"))
+	if err != nil {
+		return domain.BadRequest("invalid workID", err)
+	}
+	var body putProgressBody
+	if err := c.BodyParser(&body); err != nil {
+		return domain.BadRequest("invalid JSON body", err)
+	}
+	userRaw := firstNonEmpty(body.UserID, c.Query("user_id"), c.Get("X-User-ID"))
+	userID, err := uuid.Parse(userRaw)
+	if err != nil {
+		return domain.BadRequest("user_id must be a UUID (body/query/X-User-ID)", err)
+	}
+	chapterID, err := uuid.Parse(body.ChapterID)
+	if err != nil {
+		return domain.BadRequest("chapter_id must be a UUID", err)
+	}
+	rp := &domain.ReadingProgress{
+		UserID:         userID,
+		WorkID:         workID,
+		ChapterID:      chapterID,
+		PositionOffset: body.PositionOffset,
+	}
+	out, err := h.progress.Upsert(c.UserContext(), rp)
+	if err != nil {
+		return err
+	}
+	return c.JSON(out)
+}
+
+// GetProgress GET /api/v1/works/:workID/progress?user_id=
+func (h *WorkHandler) GetProgress(c *fiber.Ctx) error {
+	workID, err := uuid.Parse(c.Params("workID"))
+	if err != nil {
+		return domain.BadRequest("invalid workID", err)
+	}
+	userRaw := firstNonEmpty(c.Query("user_id"), c.Get("X-User-ID"))
+	userID, err := uuid.Parse(userRaw)
+	if err != nil {
+		return domain.BadRequest("user_id query/header must be a UUID", err)
+	}
+	out, err := h.progress.Get(c.UserContext(), userID, workID)
+	if err != nil {
+		return err
+	}
+	return c.JSON(out)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

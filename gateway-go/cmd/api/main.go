@@ -48,18 +48,18 @@ func main() {
 	}
 	defer func() { _ = rdb.Close() }()
 
-	// --- DI: repositories ---
 	workRepo := repository.NewPostgresWorkRepository(pool)
 	workSourceRepo := repository.NewPostgresWorkSourceRepository(pool)
 	chapterRepo := repository.NewPostgresChapterRepository(pool)
+	progressRepo := repository.NewPostgresReadingProgressRepository(pool)
 	cacheRepo := repository.NewRedisChapterCache(rdb, cfg.ChapterCacheTTL)
 	queueRepo := repository.NewRedisScrapeQueue(rdb)
 	streamRepo := repository.NewRedisStream(rdb)
 	healthRepo := repository.NewRedisSourceHealth(rdb)
 	ticketRepo := repository.NewRedisProxyTicket(rdb)
 
-	// --- DI: services ---
 	workSvc := service.NewWorkService(workRepo, workSourceRepo, chapterRepo)
+	progressSvc := service.NewProgressService(progressRepo, workRepo, chapterRepo)
 	chapterSvc := service.NewChapterService(service.ChapterServiceDeps{
 		Chapters:        chapterRepo,
 		WorkSources:     workSourceRepo,
@@ -75,9 +75,8 @@ func main() {
 	})
 	proxySvc := service.NewProxyService(ticketRepo, &http.Client{Timeout: cfg.ProxyHTTPTimeout})
 
-	// --- DI: handlers ---
 	healthH := handler.NewHealthHandler(pool, rdb)
-	workH := handler.NewWorkHandler(workSvc)
+	workH := handler.NewWorkHandler(workSvc, progressSvc)
 	chapterH := handler.NewChapterHandler(chapterSvc)
 	proxyH := handler.NewProxyHandler(proxySvc)
 
@@ -85,7 +84,7 @@ func main() {
 		DisableStartupMessage: true,
 		ErrorHandler:          middleware.NewErrorHandler(logger),
 		ReadTimeout:           30 * time.Second,
-		WriteTimeout:          0, // SSE / long proxy streams
+		WriteTimeout:          0,
 		IdleTimeout:           60 * time.Second,
 	})
 	app.Use(middleware.RequestID())
@@ -97,6 +96,8 @@ func main() {
 	api.Get("/works", workH.ListWorks)
 	api.Get("/works/:workID", workH.GetWork)
 	api.Get("/works/:workID/chapters", workH.ListChapters)
+	api.Get("/works/:workID/progress", workH.GetProgress)
+	api.Put("/works/:workID/progress", workH.PutProgress)
 	api.Get("/chapters/:chapterID/manga", chapterH.GetMangaChapter)
 	api.Get("/chapters/:chapterID/novel", chapterH.StreamNovel)
 	api.Get("/proxy/image/:ticket", proxyH.ProxyImage)

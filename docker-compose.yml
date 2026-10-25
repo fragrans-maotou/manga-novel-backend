@@ -37,6 +37,21 @@ services:
       start_period: 5s
     mem_limit: ${REDIS_MEM_LIMIT:-256m}
 
+  mock-source:
+    build:
+      context: ./mock-source
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${MOCK_SOURCE_PORT:-8090}:8090"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    mem_limit: ${MOCK_SOURCE_MEM_LIMIT:-128m}
+
   gateway-go:
     build:
       context: ./gateway-go
@@ -46,6 +61,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mock-source:
         condition: service_healthy
     environment:
       HTTP_ADDR: ${HTTP_ADDR:-:8080}
@@ -77,6 +94,8 @@ services:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      mock-source:
         condition: service_healthy
     environment:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

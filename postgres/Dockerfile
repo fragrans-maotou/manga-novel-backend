@@ -1,3 +1,4 @@
 FROM postgres:16-alpine
-# SPEC §4 schema applied on first empty data directory via official entrypoint.
+# SPEC schema + demo seed (applied only on empty data directory).
 COPY 001_init.sql /docker-entrypoint-initdb.d/001_init.sql
+COPY 002_seed_demo.sql /docker-entrypoint-initdb.d/002_seed_demo.sql

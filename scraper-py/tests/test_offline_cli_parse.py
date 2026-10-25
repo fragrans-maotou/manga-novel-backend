@@ -29,7 +29,7 @@ def test_offline_manga_sandbox_fixture():
     assert result["media_type"] == "manga"
     assert result["count"] == 4
     assert result["images"][0].startswith("https://cdn.demo-manga.example.invalid/i/")
-    assert result["images"][0].endswith("a01.jpg")
+    assert result["images"][0].endswith("a01.png")
 
 
 def test_sandbox_timeout():

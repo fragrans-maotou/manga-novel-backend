@@ -2,90 +2,76 @@
 
 漫画与小说多源聚合阅读平台的**可运行成品后端**（非学习仓）。
 
-- 学习仓（边写边学）：[manga-novel-platform](https://github.com/fragrans-maotou/manga-novel-platform)
-- 本仓：[manga-novel-backend](https://github.com/fragrans-maotou/manga-novel-backend)
-- 架构与 Redis/SQL 契约以根目录 [`SPEC.md`](./SPEC.md) 为准
+- 本仓：https://github.com/fragrans-maotou/manga-novel-backend
+- 学习仓：https://github.com/fragrans-maotou/manga-novel-platform
+- 契约：根目录 [`SPEC.md`](./SPEC.md)
+
+## 五分钟看效果
+
+```bash
+export DOCKER_HOST=tcp://127.0.0.1:2375   # 仅当 Docker 在 TCP 上时需要
+cp -n .env.example .env
+make reset-demo    # down -v → up --build → 等 healthy → seed
+make demo          # works 非空 → 小说 SSE → 漫画 JSON → 图片代理 → 进度 API
+```
+
+预期：
+
+- `GET /api/v1/works` 至少 2 部作品（小说 + 漫画）
+- 小说 SSE 出现「第一段…」「面包店」等段落
+- 漫画 JSON 含 `images: ["/api/v1/proxy/image/..."]`
+- 代理 `HEAD` 返回 200
+
+### 固定演示 UUID（`migrations/002_seed_demo.sql`）
+
+| 用途 | UUID |
+|------|------|
+| 小说 work | `11111111-1111-1111-1111-111111111101` |
+| 漫画 work | `11111111-1111-1111-1111-111111111102` |
+| 小说 chapter | `33333333-3333-3333-3333-333333333301` |
+| 漫画 chapter | `33333333-3333-3333-3333-333333333302` |
+| 演示 user | `44444444-4444-4444-4444-444444444401` |
+
+```bash
+# 手工等价于 make demo 的一部分
+curl -N http://127.0.0.1:8080/api/v1/chapters/33333333-3333-3333-3333-333333333301/novel
+curl http://127.0.0.1:8080/api/v1/chapters/33333333-3333-3333-3333-333333333302/manga
+```
+
+> **数据卷提示**：Postgres 只在**空数据目录**执行 init SQL。已有卷时用 `make seed` 补种，或 `make reset-demo` 清空重来。
 
 ## 组件
 
-| 服务 | 技术 | 职责 |
-|------|------|------|
-| `gateway-go` | Go 1.23 + Fiber | API、singleflight、SSE、32KB 图片流式代理 |
-| `scraper-py` | Python 3.12 + uv | Redis 队列 Worker（无 Web 框架）、curl_cffi + QuickJS |
-| `postgres` | 16 | 作品 / 源 / 章节 / 进度 |
-| `redis` | 7 | 队列、stream、cache、ticket、健康度 |
+| 服务 | 说明 |
+|------|------|
+| `gateway-go` | Go 1.23 API / SSE / 32KB 图片流式代理 |
+| `scraper-py` | Python Worker（无 Web 框架） |
+| `mock-source` | 虚构源站（stdlib http.server），供采集与代理 |
+| `postgres:16` | 表结构 + demo seed（镜像内 001/002） |
+| `redis:7` | 队列 / stream / cache / ticket / health |
 
-## 快速启动
-
-> **说明**：`migrations/001_init.sql` 会通过 `postgres/Dockerfile` 复制进 Postgres 镜像的
-> `/docker-entrypoint-initdb.d/`（`make up` / `make build` 会先 `sync-migration`）。
-> 这样即使 Docker daemon 无法 bind-mount 宿主机文件，首次空库仍能自动建表。
-
+## 常用命令
 
 ```bash
-cp .env.example .env   # 按需修改密码/端口
-make up                # docker compose up -d --build
-make health            # curl /healthz
-make logs              # 跟随日志
-make down              # 停止（保留数据卷）
+make up / make down / make logs / make health
+make seed              # 幂等写入演示数据
+make reset-demo        # 干净演示环境
+make demo              # 端到端验收
+make cli-novel         # 离线规则（不依赖 Redis）
 ```
-
-若当前环境的 Docker daemon 在 TCP 上（例如沙箱 `2375`）：
-
-```bash
-export DOCKER_HOST=tcp://127.0.0.1:2375
-make up
-```
-
-### 主要环境变量（见 `.env.example`）
-
-- **gateway**：`DATABASE_URL`、`REDIS_ADDR`、`HTTP_ADDR`、`SCRAPE_TIMEOUT_MS`
-- **scraper**：`REDIS_URL`、`WORKER_CONCURRENCY`、`FETCHER_IMPERSONATE`、`RULES_DIR`
-- **端口**：`GATEWAY_HTTP_PORT`（默认 8080）、`POSTGRES_PORT`、`REDIS_PORT`
 
 ## 主要 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/healthz` | 健康检查（含 postgres/redis ping） |
-| GET | `/api/v1/works` | 作品列表（`?media_type=&limit=&offset=`） |
-| GET | `/api/v1/works/:workID` | 作品详情 |
-| GET | `/api/v1/works/:workID/chapters` | 章节目录 |
-| GET | `/api/v1/chapters/:chapterID/novel` | 小说 SSE |
-| GET | `/api/v1/chapters/:chapterID/manga` | 漫画章节 JSON |
-| GET | `/api/v1/proxy/image/:ticket` | 漫画图片流式代理（可选 XOR） |
-
-## 离线测采集规则（CLI）
-
-不依赖 Redis，用仓库内虚构 fixture：
-
-```bash
-make cli-novel   # 小说段落解析
-make cli-manga   # 漫画 QuickJS 沙盒解出图片 URL
-# 或本机：
-cd scraper-py && uv sync && \
-  uv run python -m app.cli --rule app/rules/demo_novel.json --html fixtures/novel_chapter.html --pretty
-```
-
-## 验证清单
-
-```bash
-make config                 # compose 配置合法
-make up
-make health                 # gateway /healthz
-make redis-ping             # PONG
-make sql                    # 应看到 works / scraper_sources / work_sources / chapters / reading_progress
-docker compose logs scraper-py | head   # 应显示 listening queues=queue:scrape:realtime,...
-make cli-test
-make smoke                  # 一键冒烟（含 CLI）
-```
-
-## 开发阶段对照
-
-1. migrations + Go repository  
-2. Go service / handler / main  
-3. Python scraper + CLI  
-4. **Docker 多阶段 + compose + Makefile（本阶段）**
+| GET | `/healthz` | 健康检查 |
+| GET | `/api/v1/works` | 作品列表 |
+| GET | `/api/v1/works/:id/chapters` | 章节目录 |
+| GET | `/api/v1/chapters/:id/novel` | 小说 SSE |
+| GET | `/api/v1/chapters/:id/manga` | 漫画章节 JSON |
+| GET | `/api/v1/proxy/image/:ticket` | 图片流式代理 |
+| PUT | `/api/v1/works/:id/progress` | 阅读进度（body: user_id, chapter_id, position_offset） |
+| GET | `/api/v1/works/:id/progress?user_id=` | 读取进度 |
 
 ## License
 
